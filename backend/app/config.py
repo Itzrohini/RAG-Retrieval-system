@@ -31,12 +31,12 @@ class Settings(BaseSettings):
 
     # Ollama
     ollama_base_url: str = "http://localhost:11434"
-    ollama_model: str = "mistral:latest"
+    ollama_model: str = "tinyllama:latest"  # Smaller model for lower memory usage
 
     # Chunking
-    chunk_size: int = 512
-    chunk_overlap: int = 100
-    max_chunks_per_doc: int = 500
+    chunk_size: int = 256
+    chunk_overlap: int = 50
+    max_chunks_per_doc: int = 200
 
     # Retrieval
     top_k_dense: int = 20
@@ -45,7 +45,7 @@ class Settings(BaseSettings):
     top_k_rerank: int = 5
 
     # Memory optimization
-    enable_reranking: bool = True
+    enable_reranking: bool = False  # Disabled to save memory
     memory_optimization: bool = True  # Enable lazy loading and memory management
 
     # Upload

@@ -59,6 +59,7 @@ class OllamaClient:
                 "temperature": 0.1,   # low temp = more factual
                 "top_p": 0.9,
                 "num_predict": 1024,
+                "num_ctx": 2048,
             },
         }
 
