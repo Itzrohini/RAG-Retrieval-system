@@ -1,0 +1,52 @@
+# Web framework
+fastapi==0.111.0
+uvicorn[standard]==0.29.0
+python-multipart==0.0.9
+
+# Document parsing
+pymupdf==1.24.3
+pdfplumber==0.11.0
+openpyxl==3.1.2
+pandas==2.2.2
+
+# AI / Embeddings
+FlagEmbedding==1.2.10
+sentence-transformers==3.0.1
+torch==2.3.0
+
+# Vector database
+qdrant-client==1.9.1
+
+# MongoDB
+motor==3.4.0
+pymongo==4.7.2
+
+# Memory / Graph
+networkx==3.3
+redis==5.0.4
+
+# LLM
+ollama==0.2.1
+httpx==0.27.0
+
+# Caching
+aioredis==2.0.1
+
+# Chunking
+langchain==0.2.5
+langchain-community==0.2.5
+langchain-text-splitters==0.2.2
+tiktoken==0.7.0
+
+# Utilities
+python-dotenv==1.0.1
+pydantic==2.7.3
+pydantic-settings==2.3.1
+loguru==0.7.2
+tenacity==8.3.0
+psutil==6.0.0
+
+# Testing
+pytest==8.2.2
+pytest-asyncio==0.23.7
+httpx==0.27.0
