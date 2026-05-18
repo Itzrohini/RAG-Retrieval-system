@@ -1,16 +1,11 @@
 from qdrant_client import QdrantClient
 from qdrant_client.models import (
-    Distance,
-    VectorParams,
-    SparseVectorParams,
-    PointStruct,
-    SparseVector,
-    NamedVector,
-    NamedSparseVector,
-    SparseIndexParams,
+    Distance, VectorParams, SparseVectorParams,
+    PointStruct, SparseVector, NamedVector, NamedSparseVector,
+    SparseIndexParams, Filter, FieldCondition, MatchAny,
 )
 from loguru import logger
-from typing import List, Dict, Any
+from typing import List, Dict, Any, Optional
 from app.config import settings
 
 
@@ -18,7 +13,6 @@ class QdrantStore:
     """
     Manages the Qdrant vector collection.
     Stores both dense (HNSW) and sparse (BM42) vectors per chunk.
-    Enables semantic + lexical search from a single store.
     """
 
     def __init__(self):
@@ -26,27 +20,16 @@ class QdrantStore:
             host=settings.qdrant_host,
             port=settings.qdrant_port,
         )
-
         self.collection = settings.qdrant_collection_name
         self._ensure_collection()
 
     def _ensure_collection(self):
-        """Create collection if it doesn't exist."""
-
-        collections = [
-            c.name for c in self.client.get_collections().collections
-        ]
-
+        collections = [c.name for c in self.client.get_collections().collections]
         if self.collection in collections:
-            logger.info(
-                f"Qdrant collection '{self.collection}' already exists"
-            )
+            logger.info(f"Qdrant collection '{self.collection}' already exists")
             return
 
-        logger.info(
-            f"Creating Qdrant collection '{self.collection}'"
-        )
-
+        logger.info(f"Creating Qdrant collection '{self.collection}'")
         self.client.create_collection(
             collection_name=self.collection,
             vectors_config={
@@ -61,23 +44,11 @@ class QdrantStore:
                 ),
             },
         )
+        logger.info("Qdrant collection created with dense + sparse vectors")
 
-        logger.info(
-            "Qdrant collection created with dense + sparse vectors"
-        )
-
-    def upsert_chunks(
-        self,
-        chunks_with_embeddings: List[Dict[str, Any]]
-    ):
-        """
-        Batch upsert with smaller batches and retry for reliability at scale.
-        """
-
+    def upsert_chunks(self, chunks_with_embeddings: List[Dict[str, Any]]):
         points = []
-
         for item in chunks_with_embeddings:
-
             point = PointStruct(
                 id=item["chunk_id"],
                 vector={
@@ -97,80 +68,63 @@ class QdrantStore:
                     "chunk_index": item["metadata"]["chunk_index"],
                 },
             )
-
             points.append(point)
 
         batch_size = 50
-
-        total_batches = (
-            len(points) + batch_size - 1
-        ) // batch_size
+        total_batches = (len(points) + batch_size - 1) // batch_size
 
         for i in range(0, len(points), batch_size):
-
             batch = points[i:i + batch_size]
             batch_num = i // batch_size + 1
-
             for attempt in range(3):
-
                 try:
                     self.client.upsert(
                         collection_name=self.collection,
                         points=batch,
                         wait=True,
                     )
-
-                    logger.debug(
-                        f"Upserted batch {batch_num}/{total_batches}"
-                    )
-
+                    logger.debug(f"Upserted batch {batch_num}/{total_batches}")
                     break
-
                 except Exception as e:
-
                     if attempt == 2:
-                        logger.error(
-                            f"Batch {batch_num} failed after 3 attempts: {e}"
-                        )
+                        logger.error(f"Batch {batch_num} failed: {e}")
                         raise
-
-                    logger.warning(
-                        f"Batch {batch_num} attempt {attempt + 1} failed, retrying..."
-                    )
-
+                    logger.warning(f"Batch {batch_num} retry {attempt + 1}")
                     import time
                     time.sleep(1)
 
-        logger.info(
-            f"Upserted {len(points)} chunks to Qdrant in {total_batches} batches"
-        )
+        logger.info(f"Upserted {len(points)} chunks to Qdrant in {total_batches} batches")
 
     def search_dense(
         self,
         dense_vector: List[float],
-        top_k: int
+        top_k: int,
+        filter_file_names: Optional[List[str]] = None,
     ) -> List[Dict]:
+        query_filter = None
+        if filter_file_names:
+            query_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="file_name",
+                        match=MatchAny(any=filter_file_names),
+                    )
+                ]
+            )
 
         results = self.client.search(
             collection_name=self.collection,
-            query_vector=NamedVector(
-                name="dense",
-                vector=dense_vector,
-            ),
+            query_vector=NamedVector(name="dense", vector=dense_vector),
+            query_filter=query_filter,
             limit=top_k,
             with_payload=True,
         )
-
         return [
             {
                 "chunk_id": str(r.id),
                 "text": r.payload["text"],
                 "score": r.score,
-                "metadata": {
-                    k: v
-                    for k, v in r.payload.items()
-                    if k != "text"
-                },
+                "metadata": {k: v for k, v in r.payload.items() if k != "text"},
                 "source": "dense",
             }
             for r in results
@@ -181,7 +135,18 @@ class QdrantStore:
         sparse_indices: List[int],
         sparse_values: List[float],
         top_k: int,
+        filter_file_names: Optional[List[str]] = None,
     ) -> List[Dict]:
+        query_filter = None
+        if filter_file_names:
+            query_filter = Filter(
+                must=[
+                    FieldCondition(
+                        key="file_name",
+                        match=MatchAny(any=filter_file_names),
+                    )
+                ]
+            )
 
         results = self.client.search(
             collection_name=self.collection,
@@ -192,33 +157,23 @@ class QdrantStore:
                     values=sparse_values,
                 ),
             ),
+            query_filter=query_filter,
             limit=top_k,
             with_payload=True,
         )
-
         return [
             {
                 "chunk_id": str(r.id),
                 "text": r.payload["text"],
                 "score": r.score,
-                "metadata": {
-                    k: v
-                    for k, v in r.payload.items()
-                    if k != "text"
-                },
+                "metadata": {k: v for k, v in r.payload.items() if k != "text"},
                 "source": "sparse",
             }
             for r in results
         ]
 
     def delete_by_doc_id(self, doc_id: str):
-
-        from qdrant_client.models import (
-            Filter,
-            FieldCondition,
-            MatchValue,
-        )
-
+        from qdrant_client.models import Filter, FieldCondition, MatchValue
         self.client.delete(
             collection_name=self.collection,
             points_selector=Filter(
@@ -230,7 +185,11 @@ class QdrantStore:
                 ]
             ),
         )
+        logger.info(f"Deleted all chunks for doc_id: {doc_id}")
 
-        logger.info(
-            f"Deleted all chunks for doc_id: {doc_id}"
-        )
+    def get_collection_info(self) -> Dict:
+        info = self.client.get_collection(self.collection)
+        return {
+            "total_vectors": info.vectors_count,
+            "status": str(info.status),
+        }

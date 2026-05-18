@@ -49,6 +49,9 @@ class QueryRequest(BaseModel):
     top_k: int = 5
     use_cache: bool = True
 
+    filter_doc_ids:Optional[List[str]] = None
+    filter_file_names: Optional[List[str]] = None
+
 
 class SourceChunk(BaseModel):
     chunk_id: str

@@ -10,40 +10,72 @@ from app.services.database.mongo_store import MongoStore
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup and shutdown logic."""
-    logger.info(f"Starting {settings.app_name} in {settings.app_env} mode")
+    logger.info(f"Starting {settings.app_name}")
 
-    # Ensure MongoDB indexes on startup
     mongo = MongoStore()
     await mongo.ensure_indexes()
 
+    # Pre-load embedding model at startup so first query is fast
+    logger.info("Pre-loading BGE-M3 embedding model...")
+
+    try:
+        from app.services.embedding.embedder import BGEEmbedder
+
+        embedder = BGEEmbedder()
+        _ = embedder.embed_query("warmup")
+
+        logger.info("BGE-M3 model ready")
+
+    except Exception as e:
+        logger.warning(f"Model pre-load failed: {e}")
+
     logger.info("All services initialized")
+
     yield
+
     logger.info("Shutting down")
 
 
+# Create FastAPI app
 app = FastAPI(
-    title="RAG System API",
-    description="Production RAG with Hybrid Retrieval + MemPalace",
-    version="1.0.0",
-    lifespan=lifespan,
+    title=settings.app_name,
+    lifespan=lifespan
 )
 
-# CORS — allows the React frontend (port 5173) to call this backend (port 8000)
+# CORS — allows the React frontend to call backend
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["http://localhost:5173", "http://localhost:3000"],
+    allow_origins=[
+        "http://localhost:5173",
+        "http://localhost:3000"
+    ],
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 # Register routes
-app.include_router(health.router, tags=["Health"])
-app.include_router(ingest.router, prefix="/api/v1", tags=["Ingest"])
-app.include_router(query.router, prefix="/api/v1", tags=["Query"])
+app.include_router(
+    health.router,
+    tags=["Health"]
+)
+
+app.include_router(
+    ingest.router,
+    prefix="/api/v1",
+    tags=["Ingest"]
+)
+
+app.include_router(
+    query.router,
+    prefix="/api/v1",
+    tags=["Query"]
+)
 
 
 @app.get("/")
 async def root():
-    return {"message": "RAG System API is running", "docs": "/docs"}
+    return {
+        "message": "RAG System API is running",
+        "docs": "/docs"
+    }

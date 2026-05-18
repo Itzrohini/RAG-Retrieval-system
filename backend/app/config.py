@@ -10,6 +10,10 @@ class Settings(BaseSettings):
     debug: bool = True
     api_host: str = "0.0.0.0"
     api_port: int = 8000
+    # LLM Provider — switch between ollama and gemini
+    llm_provider: str = "gemini"
+    gemini_api_key: str = ""
+    gemini_model: str = "gemini-2.0-flash"
 
     # MongoDB
     mongodb_url: str = "mongodb://localhost:27017"
