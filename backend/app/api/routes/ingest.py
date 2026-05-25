@@ -1,20 +1,13 @@
 import uuid
-import shutil
 from pathlib import Path
 from fastapi import APIRouter, UploadFile, File, HTTPException, BackgroundTasks
 from loguru import logger
 from app.config import settings
 from app.models.document import IngestResponse, DocumentType
-from app.services.ingestion.pdf_parser import PDFParser
-from app.services.ingestion.excel_parser import ExcelParser
-from app.services.ingestion.chunker import SemanticChunker
-from app.services.embedding.embedder import BGEEmbedder
-from app.services.vectorstore.qdrant_store import QdrantStore
-from app.services.database.mongo_store import MongoStore
 
 router = APIRouter()
 
-ALLOWED_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".csv"}
+ALLOWED_EXTENSIONS = {".pdf", ".xlsx", ".xls", ".csv", ".json", ".jsonl"}
 
 
 @router.post("/ingest", response_model=IngestResponse)
@@ -23,7 +16,7 @@ async def ingest_document(
     file: UploadFile = File(...),
 ):
     """
-    Upload a PDF or Excel file.
+    Upload a PDF, Excel, or JSON file.
     The file is parsed, chunked, embedded, and stored in Qdrant + MongoDB.
     """
     suffix = Path(file.filename).suffix.lower()
@@ -48,7 +41,6 @@ async def ingest_document(
 
     logger.info(f"Saved upload: {save_path}")
 
-    # Run heavy processing in background
     background_tasks.add_task(
         process_document,
         str(save_path),
@@ -62,9 +54,9 @@ async def ingest_document(
         doc_id=doc_id,
         file_name=file.filename,
         doc_type=doc_type,
-        total_chunks=0,  # updated when background task completes
+        total_chunks=0,
         status="processing",
-        message="File received. Processing in background. Check /health for status.",
+        message="File received. Processing in background.",
     )
 
 
@@ -74,52 +66,68 @@ async def process_document(
     file_name: str,
     suffix: str,
 ):
-    """Background task: parse → chunk → embed → store."""
     try:
+        from app.services.ingestion.chunker import SemanticChunker
+        from app.services.embedding.embedder import BGEEmbedder
+        from app.services.vectorstore.qdrant_store import QdrantStore
+        from app.services.database.mongo_store import MongoStore
+
         chunker = SemanticChunker()
         embedder = BGEEmbedder()
         qdrant = QdrantStore()
         mongo = MongoStore()
 
-        # Parse
+        # Parse file
         if suffix == ".pdf":
-            parser = PDFParser()
-            pages = parser.parse(file_path)
+            from app.services.ingestion.pdf_parser import PDFParser
+            pages = PDFParser().parse(file_path)
             chunks = chunker.chunk_pdf_pages(pages, doc_id, file_name)
+        elif suffix in {".json", ".jsonl"}:
+            from app.services.ingestion.json_parser import JSONParser
+            pages = JSONParser().parse(file_path)
+            chunks = chunker.chunk_excel_sheets(pages, doc_id, file_name)
         else:
-            parser = ExcelParser()
-            sheets = parser.parse(file_path)
+            from app.services.ingestion.excel_parser import ExcelParser
+            sheets = ExcelParser().parse(file_path)
             chunks = chunker.chunk_excel_sheets(sheets, doc_id, file_name)
 
         if not chunks:
-            logger.warning(f"No chunks extracted from {file_name}")
+            logger.warning(f"No chunks from {file_name}")
             return
 
-        # Embed
+        # Embed all chunks — returns list of {"dense": [...], "sparse": {"indices": [...], "values": [...]}}
         texts = [c.text for c in chunks]
         embeddings = embedder.embed_texts(texts)
 
-        # Prepare for Qdrant
+        # Build items for Qdrant (dense + sparse vectors)
         qdrant_items = []
         mongo_chunks = []
+
         for chunk, emb in zip(chunks, embeddings):
+            meta = chunk.metadata.model_dump()
+
+            # Qdrant gets vectors
             qdrant_items.append({
                 "chunk_id": chunk.chunk_id,
                 "text": chunk.text,
                 "dense": emb["dense"],
-                "sparse": emb["sparse"],
-                "metadata": chunk.metadata.model_dump(),
-            })
-            mongo_chunks.append({
-                "chunk_id": chunk.chunk_id,
-                "doc_id": doc_id,
-                "text": chunk.text,
-                "file_name": file_name,
-                "page_number": chunk.metadata.page_number,
-                "sheet_name": chunk.metadata.sheet_name,
+                "sparse": emb["sparse"],  # {"indices": [...], "values": [...]}
+                "metadata": meta,
             })
 
-        # Store
+            # MongoDB gets text + metadata for BM25
+            mongo_chunks.append({
+                "chunk_id": chunk.chunk_id,
+                "doc_id": meta["doc_id"],
+                "file_name": meta["file_name"],
+                "doc_type": meta["doc_type"],
+                "page_number": meta.get("page_number"),
+                "sheet_name": meta.get("sheet_name"),
+                "chunk_index": meta["chunk_index"],
+                "text": chunk.text,
+            })
+
+        # Store in both
         qdrant.upsert_chunks(qdrant_items)
         await mongo.save_chunks(mongo_chunks)
         await mongo.save_document({
@@ -130,7 +138,7 @@ async def process_document(
             "status": "ready",
         })
 
-        logger.info(f"Document {file_name} fully processed: {len(chunks)} chunks")
+        logger.info(f"Document {file_name} fully processed: {len(chunks)} chunks → Qdrant + MongoDB")
 
     except Exception as e:
         logger.error(f"Failed to process {file_name}: {e}")

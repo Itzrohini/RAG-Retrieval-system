@@ -37,57 +37,66 @@ class PDFParser:
         pages = []
         doc = fitz.open(file_path)
 
+        # Build the full page label map once for all pages
+        label_map = self._build_label_map(doc)
+
         for page_idx in range(len(doc)):
             page = doc[page_idx]
             text = page.get_text("text").strip()
-
-            # Get the printed page number from PDF labels
-            # This matches what you see printed in the book
-            printed_page = self._get_printed_page_number(doc, page_idx)
+            printed_page = label_map.get(page_idx, page_idx + 1)
 
             pages.append({
-                "page_number": printed_page,       # printed number (e.g. 90)
-                "page_index": page_idx + 1,        # file position (e.g. 95)
+                "page_number": printed_page,
+                "page_index": page_idx + 1,
                 "text": text,
                 "has_tables": False,
             })
         doc.close()
         return pages
 
-    def _get_printed_page_number(self, doc: fitz.Document, page_idx: int) -> int:
+    def _build_label_map(self, doc: fitz.Document) -> dict:
         """
-        Try to get the actual printed page number from the PDF.
-        NCERT books have Roman numerals for preface, then Arabic for chapters.
-        We want the Arabic numeral page numbers.
+        Build a complete map of {page_index: printed_page_number} for all pages.
+        Handles NCERT books which use Roman numerals for preface pages,
+        then switch to Arabic numerals for chapter pages.
+        Only maps Arabic numeral pages — Roman numeral pages get their file index.
         """
+        label_map = {}
+        total_pages = len(doc)
+
         try:
-            # Method 1: Read page label from PDF metadata
-            page_label = doc.get_page_labels()
-            if page_label:
-                for label_info in page_label:
-                    start = label_info.get("startpage", 0)
-                    style = label_info.get("style", "")
-                    prefix = label_info.get("prefix", "")
-                    first = label_info.get("firstpagenum", 1)
+            page_labels = doc.get_page_labels()
+            if not page_labels:
+                # No labels — use 1-based index for all
+                return {i: i + 1 for i in range(total_pages)}
 
-                    if style in ("D", "") and page_idx >= start:
-                        return first + (page_idx - start)
+            # Sort by startpage to process in order
+            page_labels = sorted(page_labels, key=lambda x: x.get("startpage", 0))
 
-            # Method 2: Look for printed number in page text
-            page = doc[page_idx]
-            text = page.get_text("text").strip()
-            lines = [l.strip() for l in text.split("\n") if l.strip()]
+            for label_idx, label_info in enumerate(page_labels):
+                start = label_info.get("startpage", 0)
+                style = label_info.get("style", "D")
+                first = label_info.get("firstpagenum", 1)
 
-            # Page numbers are usually on first or last line, short, numeric
-            for line in [lines[0], lines[-1]] if len(lines) > 1 else lines:
-                if line.isdigit() and 1 <= int(line) <= 9999:
-                    return int(line)
+                # Find end of this label range
+                if label_idx + 1 < len(page_labels):
+                    end = page_labels[label_idx + 1].get("startpage", total_pages)
+                else:
+                    end = total_pages
 
-        except Exception:
-            pass
+                for page_idx in range(start, end):
+                    if style == "D" or style == "":
+                        # Arabic numerals — this is the real chapter page number
+                        label_map[page_idx] = first + (page_idx - start)
+                    else:
+                        # Roman numerals (style="r" or "R") or letters — use file index
+                        label_map[page_idx] = page_idx + 1
 
-        # Fallback: use 1-indexed position in file
-        return page_idx + 1
+        except Exception as e:
+            logger.warning(f"Could not read page labels: {e}, using 1-based index")
+            return {i: i + 1 for i in range(total_pages)}
+
+        return label_map
 
     def _parse_with_pdfplumber(self, file_path: str) -> List[Dict[str, Any]]:
         pages = []

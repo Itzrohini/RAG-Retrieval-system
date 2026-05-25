@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings
+from pydantic import Field
 from functools import lru_cache
 from pathlib import Path
 
@@ -16,7 +17,7 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-2.0-flash"
 
     # MongoDB
-    mongodb_url: str = "mongodb://localhost:27017"
+    mongodb_url: str = Field(..., alias="MONGODB_URL")
     mongodb_db_name: str = "rag_system"
 
     # Qdrant
@@ -38,9 +39,9 @@ class Settings(BaseSettings):
     ollama_model: str = "tinyllama:latest"  # Smaller model for lower memory usage
 
     # Chunking
-    chunk_size: int = 256
-    chunk_overlap: int = 50
-    max_chunks_per_doc: int = 200
+    chunk_size: int = 512
+    chunk_overlap: int = 100
+    max_chunks_per_doc: int = 500
 
     # Retrieval
     top_k_dense: int = 20
@@ -49,7 +50,7 @@ class Settings(BaseSettings):
     top_k_rerank: int = 5
 
     # Memory optimization
-    enable_reranking: bool = False  # Disabled to save memory
+    enable_reranking: bool = True  # Disabled to save memory
     memory_optimization: bool = True  # Enable lazy loading and memory management
 
     # Upload
@@ -67,6 +68,7 @@ def get_settings() -> Settings:
 
 
 settings = get_settings()
+print("Loaded Mongo URL:", settings.mongodb_url)
 
 # Ensure upload dir exists
 Path(settings.upload_dir).mkdir(parents=True, exist_ok=True)

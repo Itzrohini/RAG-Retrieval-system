@@ -41,7 +41,7 @@ class CrossEncoderReranker:
             available_memory = psutil.virtual_memory().available / (1024 ** 3)  # GB
             if available_memory < 3.0:  # Less than 3GB available
                 logger.warning(f"Low memory detected: {available_memory:.1f}GB available. Reranker loading may fail.")
-                if available_memory < 1.5:  # Critical memory
+                if available_memory < 0.8:  # Critical memory
                     raise MemoryError(f"Insufficient memory to load reranker model. Available: {available_memory:.1f}GB")
 
             logger.info(f"Loading re-ranker: {settings.reranker_model}")
@@ -69,26 +69,54 @@ class CrossEncoderReranker:
         """
         Score each (query, candidate_text) pair and return top_k.
         """
+
         if not candidates:
             return []
 
-        # Lazy load model on first use
-        self._load_model()
+        try:
+            # Lazy load model only when needed
+            self._load_model()
 
-        top_k = top_k or settings.top_k_rerank
-        pairs = [(query, c["text"]) for c in candidates]
+            top_k = top_k or settings.top_k_rerank
 
-        logger.info(f"Re-ranking {len(pairs)} candidates")
-        scores = self.model.predict(pairs, show_progress_bar=False)
+            # Prepare query-document pairs
+            pairs = [(query, c["text"]) for c in candidates]
 
-        for i, candidate in enumerate(candidates):
-            candidate["rerank_score"] = float(scores[i])
+            logger.info(f"Re-ranking {len(pairs)} candidates")
 
-        reranked = sorted(candidates, key=lambda x: x["rerank_score"], reverse=True)
-        top = reranked[:top_k]
+            # Cross-encoder scoring
+            scores = self.model.predict(
+                pairs,
+                show_progress_bar=False
+            )
 
-        logger.info(
-            f"Re-rank scores: top={top[0]['rerank_score']:.3f}, "
-            f"bottom={top[-1]['rerank_score']:.3f}"
-        )
-        return top
+            # Attach scores
+            for i, candidate in enumerate(candidates):
+                candidate["rerank_score"] = float(scores[i])
+
+            # Sort by highest relevance
+            reranked = sorted(
+                candidates,
+                key=lambda x: x["rerank_score"],
+                reverse=True
+            )
+
+            top = reranked[:top_k]
+
+            logger.info(
+                f"Re-rank scores: "
+                f"top={top[0]['rerank_score']:.3f}, "
+                f"bottom={top[-1]['rerank_score']:.3f}"
+            )
+
+            return top
+
+        except Exception as e:
+            logger.error(f"Reranking failed: {e}")
+
+            # Fallback without reranking
+            return candidates[:top_k]
+
+        finally:
+            # Always free memory after reranking
+            self.unload_model()

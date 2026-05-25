@@ -35,31 +35,26 @@ class GeminiClient:
     def _is_general_question(self, question: str, context_chunks: List[Dict]) -> bool:
         """
         Detect if question is general knowledge vs document-specific.
-        If top chunk scores are very low, the question is likely general.
+        Only treat as general if NO chunks were retrieved at all.
+        The retriever already filters by relevance — trust its output.
         """
+        # No chunks = nothing found in docs = general question
         if not context_chunks:
             return True
 
-        top_score = context_chunks[0].get(
-            "rerank_score",
-            context_chunks[0].get("score", 0)
-        )
-
+        # Check hardcoded greetings / meta questions that are never in docs
         general_keywords = [
-            "what is rag", "what is ai", "what is machine learning",
-            "what is python", "hello", "hi", "how are you",
+            "hello", "hi", "how are you",
             "what can you do", "who are you", "what is your name",
-            "explain to me", "tell me about yourself",
+            "tell me about yourself",
         ]
-
         q_lower = question.lower().strip()
-        if any(kw in q_lower for kw in general_keywords):
+        if any(kw == q_lower for kw in general_keywords):
             return True
 
-        # If best match score is below 2% it's likely not in the docs
-        if top_score < 0.02:
-            return True
-
+        # We have chunks — trust the retriever, use RAG mode
+        # DO NOT check score here — RRF scores are tiny (max ~0.016)
+        # and a threshold of 0.02 would always trigger general mode
         return False
 
     def _build_rag_prompt(
@@ -84,11 +79,12 @@ class GeminiClient:
         prompt = f"""You are a helpful study assistant. Use the document context below to answer the question.
 
 Rules:
-- Answer clearly and completely from the context
+- Answer ONLY from the context provided below
 - Use **bold** for key terms and definitions
 - End with: "Source: [filename], Page [number]"
 - If the answer spans multiple sources, cite all of them
-- If not found in context, say: "This topic is not covered in the uploaded documents."
+- If the context does not contain the answer, say exactly: "This topic is not covered in the uploaded documents."
+- Do NOT use your general knowledge — only use what is in the context
 
 Context:
 {context_text}
@@ -105,6 +101,7 @@ Answer:"""
         return f"""You are a helpful assistant. Answer this question clearly and helpfully.
 Use **bold** for important terms.
 Be concise but complete.
+Since no relevant documents were found, answer from general knowledge and mention this is general knowledge, not from uploaded documents.
 
 {f"Prior conversation:{memory_context}" if memory_context else ""}
 
@@ -124,7 +121,7 @@ Answer:"""
 
         if is_general:
             prompt = self._build_general_prompt(question, memory_context)
-            logger.info("Mode: GENERAL knowledge (not document-specific)")
+            logger.info("Mode: GENERAL knowledge (no chunks retrieved)")
         else:
             prompt = self._build_rag_prompt(question, context_chunks, memory_context)
             logger.info(f"Mode: RAG from documents ({len(context_chunks)} chunks)")

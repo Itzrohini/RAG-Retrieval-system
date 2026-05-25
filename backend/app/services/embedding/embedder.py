@@ -61,3 +61,18 @@ class BGEEmbedder:
 
     def embed_query(self, query: str) -> Dict[str, Any]:
         return self.embed_texts([query])[0]
+    
+    def unload(self):
+        """Free model from RAM so reranker can load."""
+        import gc
+        if hasattr(self, 'model') and self.model is not None:
+            logger.info("Unloading BGE-M3 to free RAM for reranker")
+            del self.model
+            self.model = None
+            BGEEmbedder._instance = None  # reset singleton so next call reloads
+            BGEEmbedder._initialized = False
+            self._initialized = False
+            gc.collect()
+            if torch.cuda.is_available():
+                torch.cuda.empty_cache()
+            logger.info("BGE-M3 unloaded")

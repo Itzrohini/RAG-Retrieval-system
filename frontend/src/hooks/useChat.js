@@ -7,17 +7,20 @@ export function useChat() {
   const [sources, setSources] = useState([])
   const [queryMeta, setQueryMeta] = useState(null)
   const sessionId = useRef(uuidv4())
+  const requestStartTime = useRef(null)
 
   const sendMessage = useCallback(async (question) => {
     if (!question.trim() || isLoading) return
 
     setMessages(prev => [...prev, { role: 'user', content: question }])
     setIsLoading(true)
-    setSources([])
+    setSources([])   // always clear sources at the start of a new question
     setQueryMeta(null)
     setMessages(prev => [...prev, {
       role: 'assistant', content: '', loading: true
     }])
+
+    requestStartTime.current = performance.now()
 
     try {
       const response = await fetch('/api/v1/query/stream', {
@@ -56,15 +59,23 @@ export function useChat() {
               })
 
             } else if (parsed.type === 'sources') {
+              // Backend only sends this event when is_general=False and
+              // relevant chunks exist — so we can safely set them here.
               setSources(parsed.data)
 
             } else if (parsed.type === 'mempalace') {
-              // Store MemPalace info to show in UI
               setQueryMeta(prev => ({ ...prev, mempalace: parsed.data }))
 
             } else if (parsed.type === 'done') {
               setIsLoading(false)
               setQueryMeta(parsed.data)
+
+              // If the final answer is general knowledge, clear any stale
+              // sources that might have been set from a previous question.
+              if (parsed.data?.is_general) {
+                setSources([])
+              }
+
               setMessages(prev => {
                 const updated = [...prev]
                 updated[updated.length - 1] = {
@@ -80,7 +91,15 @@ export function useChat() {
               })
 
             } else if (parsed.type === 'cached') {
-              setSources(parsed.data.sources || [])
+              const realLatency = Math.round(performance.now() - requestStartTime.current)
+
+              // Only show cached sources when the cached answer was NOT general.
+              // is_general is now stored in the cache on the backend.
+              const cachedIsGeneral = parsed.data.is_general ?? false
+              const cachedSources = cachedIsGeneral ? [] : (parsed.data.sources || [])
+
+              setSources(cachedSources)
+
               setMessages(prev => {
                 const updated = [...prev]
                 updated[updated.length - 1] = {
@@ -88,8 +107,9 @@ export function useChat() {
                   content: parsed.data.answer,
                   loading: false,
                   cached: true,
-                  latency: parsed.data.latency_ms,
-                  isGeneral: parsed.data.is_general,
+                  latency: realLatency,
+                  isGeneral: cachedIsGeneral,
+                  chunksUsed: cachedSources.length,
                 }
                 return updated
               })

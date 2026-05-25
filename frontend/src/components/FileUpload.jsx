@@ -31,16 +31,19 @@ export default function FileUpload({ onUploadComplete }) {
     setUploading(false)
   }, [onUploadComplete])
 
-  const { getRootProps, getInputProps, isDragActive } = useDropzone({
-    onDrop,
-    accept: {
-      'application/pdf': ['.pdf'],
-      'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
-      'application/vnd.ms-excel': ['.xls'],
-      'text/csv': ['.csv'],
-    },
-    maxSize: 50 * 1024 * 1024,
-  })
+const { getRootProps, getInputProps, isDragActive } = useDropzone({
+  onDrop,
+  accept: {
+    'application/pdf': ['.pdf'],
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet': ['.xlsx'],
+    'application/vnd.ms-excel': ['.xls'],
+    'text/csv': ['.csv'],
+    'application/json': ['.json'],
+    'application/x-ndjson': ['.jsonl'],
+    'text/plain': ['.jsonl', '.json'], // some browsers use text/plain
+  },
+  maxSize: 50 * 1024 * 1024,
+})
 
   return (
     <div style={{ width: '100%' }}>
@@ -72,7 +75,7 @@ export default function FileUpload({ onUploadComplete }) {
               Drag and drop PDF or Excel files here
             </p>
             <p style={{ color: '#9ca3af', fontSize: '13px', marginTop: '6px', marginBottom: 0 }}>
-              or click to browse — max 50MB
+              PDF, Excel, CSV, JSON, JSONL — max 50MB
             </p>
           </>
         )}
